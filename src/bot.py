@@ -1,9 +1,14 @@
 import os
 import logging
+from datetime import datetime
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes, ConversationHandler
-from database import create_task, get_tasks, complete_task, delete_task, init_db
+from database import (
+    init_db, get_or_create_user, add_result, get_leaderboard,
+    Simulator, FlightMode, Map
+)
+from registration import get_registration_handler
 
 # Настройка логирования
 logging.basicConfig(
@@ -17,102 +22,200 @@ load_dotenv('config/.env')
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 
 # Состояния для ConversationHandler
-TITLE, DESCRIPTION = range(2)
+CHOOSING_ACTION, REGISTERING_USER, CHOOSING_SIMULATOR, CHOOSING_MODE, CHOOSING_MAP, ENTERING_TIME = range(6)
+
+def create_simulator_keyboard():
+    """Создание клавиатуры с симуляторами"""
+    keyboard = [
+        [InlineKeyboardButton(sim.value, callback_data=f"sim_{sim.name}")]
+        for sim in Simulator
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def create_mode_keyboard():
+    """Создание клавиатуры с режимами полета"""
+    keyboard = [
+        [InlineKeyboardButton(mode.value, callback_data=f"mode_{mode.name}")]
+        for mode in FlightMode
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def create_map_keyboard():
+    """Создание клавиатуры с картами"""
+    keyboard = [
+        [InlineKeyboardButton(map.value, callback_data=f"map_{map.name}")]
+        for map in Map
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def create_action_keyboard():
+    """Создание клавиатуры с действиями"""
+    keyboard = [
+        [InlineKeyboardButton("Внести время", callback_data="action_add")],
+        [InlineKeyboardButton("Leaderboard", callback_data="action_leaderboard")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start"""
     user = update.effective_user
-    await update.message.reply_text(
-        f"Привет, {user.first_name}! Я бот для управления задачами.\n"
-        "Используйте следующие команды:\n"
-        "/new - Создать новую задачу\n"
-        "/list - Показать список задач\n"
-        "/help - Показать справку"
+    
+    # Проверяем, зарегистрирован ли пользователь
+    db_user = get_or_create_user(
+        telegram_id=user.id,
+        first_name=user.first_name,
+        last_name=user.last_name or "",
+        group="Default",
+        birth_date=datetime.now()
     )
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /help"""
+    
+    if db_user.group == "Default":
+        await update.message.reply_text(
+            "Для начала работы нужно зарегистрироваться.\n"
+            "Используйте команду /register"
+        )
+        return ConversationHandler.END
+    
     await update.message.reply_text(
-        "Доступные команды:\n"
-        "/start - Начать работу с ботом\n"
-        "/new - Создать новую задачу\n"
-        "/list - Показать список задач\n"
-        "/help - Показать это сообщение"
+        "Вы хотите внести время или увидеть leaderboard?",
+        reply_markup=create_action_keyboard()
     )
+    return CHOOSING_ACTION
 
-async def new_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Начало создания новой задачи"""
-    await update.message.reply_text("Введите заголовок задачи:")
-    return TITLE
-
-async def title_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка заголовка задачи"""
-    context.user_data['title'] = update.message.text
-    await update.message.reply_text("Введите описание задачи (или отправьте /skip):")
-    return DESCRIPTION
-
-async def skip_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Пропуск описания задачи"""
-    return await save_task(update, context)
-
-async def description_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка описания задачи"""
-    context.user_data['description'] = update.message.text
-    return await save_task(update, context)
-
-async def save_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Сохранение задачи в базу данных"""
-    user_id = update.effective_user.id
-    title = context.user_data['title']
-    description = context.user_data.get('description', '')
-    
-    task = create_task(user_id, title, description)
-    await update.message.reply_text(
-        f"Задача создана!\n"
-        f"ID: {task.id}\n"
-        f"Заголовок: {task.title}\n"
-        f"Описание: {task.description or 'Нет описания'}"
-    )
-    return ConversationHandler.END
-
-async def list_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показать список задач"""
-    user_id = update.effective_user.id
-    tasks = get_tasks(user_id)
-    
-    if not tasks:
-        await update.message.reply_text("У вас пока нет задач. Создайте новую с помощью команды /new")
-        return
-    
-    message = "Ваши задачи:\n\n"
-    for task in tasks:
-        status = "✅" if task.is_completed else "⏳"
-        message += f"{status} {task.title}\n"
-        if task.description:
-            message += f"   {task.description}\n"
-        message += f"   ID: {task.id}\n\n"
-    
-    await update.message.reply_text(message)
-
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик нажатий на кнопки"""
+async def action_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора действия"""
     query = update.callback_query
     await query.answer()
     
-    action, task_id = query.data.split(':')
-    task_id = int(task_id)
-    user_id = query.from_user.id
+    if query.data == "action_add":
+        await query.message.reply_text(
+            "Выберите симулятор:",
+            reply_markup=create_simulator_keyboard()
+        )
+        return CHOOSING_SIMULATOR
+    elif query.data == "action_leaderboard":
+        await query.message.reply_text(
+            "Выберите симулятор для просмотра таблицы лидеров:",
+            reply_markup=create_simulator_keyboard()
+        )
+        return CHOOSING_SIMULATOR
+
+async def simulator_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора симулятора"""
+    query = update.callback_query
+    await query.answer()
     
-    if action == 'complete':
-        if complete_task(task_id, user_id):
-            await query.message.reply_text(f"Задача {task_id} отмечена как выполненная!")
-        else:
-            await query.message.reply_text("Ошибка при выполнении задачи")
-    elif action == 'delete':
-        if delete_task(task_id, user_id):
-            await query.message.reply_text(f"Задача {task_id} удалена!")
-        else:
-            await query.message.reply_text("Ошибка при удалении задачи")
+    simulator_name = query.data.split('_')[1]
+    context.user_data['simulator'] = Simulator[simulator_name]
+    
+    await query.message.reply_text(
+        "Выберите режим полета:",
+        reply_markup=create_mode_keyboard()
+    )
+    return CHOOSING_MODE
+
+async def mode_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора режима полета"""
+    query = update.callback_query
+    await query.answer()
+    
+    mode_name = query.data.split('_')[1]
+    context.user_data['flight_mode'] = FlightMode[mode_name]
+    
+    await query.message.reply_text(
+        "Выберите название трассы:",
+        reply_markup=create_map_keyboard()
+    )
+    return CHOOSING_MAP
+
+async def map_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора карты"""
+    query = update.callback_query
+    await query.answer()
+    
+    map_name = query.data.split('_')[1]
+    context.user_data['map_name'] = Map[map_name]
+    
+    if 'action' in context.user_data and context.user_data['action'] == 'leaderboard':
+        return await show_leaderboard(update, context)
+    else:
+        await query.message.reply_text(
+            "Введите время в формате: секунды.миллисекунды\n"
+            "Пример: 38.106"
+        )
+        return ENTERING_TIME
+
+async def time_entered(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка ввода времени"""
+    try:
+        time = float(update.message.text)
+        user = update.effective_user
+        
+        # Получаем пользователя из базы данных
+        db_user = get_or_create_user(
+            telegram_id=user.id,
+            first_name=user.first_name,
+            last_name=user.last_name or "",
+            group="Default",
+            birth_date=datetime.now()
+        )
+        
+        if db_user.group == "Default":
+            await update.message.reply_text(
+                "Для внесения результатов нужно зарегистрироваться.\n"
+                "Используйте команду /register"
+            )
+            return ConversationHandler.END
+        
+        # Добавляем результат
+        add_result(
+            user_id=db_user.id,
+            simulator=context.user_data['simulator'],
+            flight_mode=context.user_data['flight_mode'],
+            map_name=context.user_data['map_name'],
+            time=time
+        )
+        
+        await update.message.reply_text(
+            "Вы отлично пролетели, поздравляю! Ваш результат записан!"
+        )
+    except ValueError:
+        await update.message.reply_text(
+            "Неверный формат времени. Пожалуйста, введите число в формате: секунды.миллисекунды\n"
+            "Пример: 38.106"
+        )
+        return ENTERING_TIME
+    
+    return ConversationHandler.END
+
+async def show_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показ таблицы лидеров"""
+    query = update.callback_query
+    await query.answer()
+    
+    leaderboard = get_leaderboard(
+        simulator=context.user_data['simulator'],
+        flight_mode=context.user_data['flight_mode'],
+        map_name=context.user_data['map_name']
+    )
+    
+    current_time = datetime.now().strftime("%H:%M %d.%m.%Y")
+    message = (
+        f"Leaderboard Аэроквантум-15 от {current_time} г.\n"
+        f"{context.user_data['simulator'].value}, {context.user_data['flight_mode'].value.lower()}, "
+        f"{context.user_data['map_name'].value}\n\n"
+    )
+    
+    for i, result in enumerate(leaderboard, 1):
+        message += f"{i}. {result['time']:.3f} - {result['name']}, гр. {result['group']}\n"
+    
+    # Дополняем пустыми местами до 10
+    while len(leaderboard) < 10:
+        message += f"{len(leaderboard) + 1}. (место не занято)\n"
+        leaderboard.append(None)
+    
+    await query.message.reply_text(message)
+    return ConversationHandler.END
 
 def main():
     """Основная функция запуска бота"""
@@ -122,25 +225,32 @@ def main():
     # Создаем приложение
     application = Application.builder().token(BOT_TOKEN).build()
 
-    # Создаем обработчик для создания новой задачи
+    # Создаем обработчик диалога
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler('new', new_task)],
+        entry_points=[CommandHandler('start', start)],
         states={
-            TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, title_received)],
-            DESCRIPTION: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, description_received),
-                CommandHandler('skip', skip_description)
+            CHOOSING_ACTION: [
+                CallbackQueryHandler(action_chosen, pattern='^action_')
+            ],
+            CHOOSING_SIMULATOR: [
+                CallbackQueryHandler(simulator_chosen, pattern='^sim_')
+            ],
+            CHOOSING_MODE: [
+                CallbackQueryHandler(mode_chosen, pattern='^mode_')
+            ],
+            CHOOSING_MAP: [
+                CallbackQueryHandler(map_chosen, pattern='^map_')
+            ],
+            ENTERING_TIME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, time_entered)
             ],
         },
-        fallbacks=[],
+        fallbacks=[CommandHandler('start', start)],
     )
 
-    # Добавляем обработчики команд
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("list", list_tasks))
+    # Добавляем обработчики
     application.add_handler(conv_handler)
-    application.add_handler(CallbackQueryHandler(button_handler))
+    application.add_handler(get_registration_handler())
 
     # Запускаем бота
     application.run_polling(allowed_updates=Update.ALL_TYPES)
