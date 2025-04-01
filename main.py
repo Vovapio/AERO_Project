@@ -4,10 +4,10 @@
 # Press Double Shift to search everywhere for classes, files, tool windows, actions, and settings.
 
 import logging
-import sqlite3
 from datetime import datetime
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
+from database import get_user, create_or_update_user, add_flight_result, get_leaderboard
 
 # Включаем логирование
 logging.basicConfig(
@@ -18,40 +18,14 @@ logging.basicConfig(
 # Состояния для регистрации
 LASTNAME, FIRSTNAME, GROUP, BIRTHDATE = range(4)
 # Состояния для регистрации результата
-SIMULATOR, TRACK, MODE, BEST_TIME = range(4, 8)
+SIMULATOR, TRACK, MODE, BEST_TIME, IMAGE = range(4, 9)
 # Состояния для просмотра таблицы лидеров
 LEADERBOARD_SIMULATOR, LEADERBOARD_MODE, LEADERBOARD_TRACK = range(8, 11)
-
-def init_db():
-    """Инициализация базы данных"""
-    conn = sqlite3.connect('fpv_leaderboard.db')
-    c = conn.cursor()
-    
-    # Таблица пользователей
-    c.execute('''CREATE TABLE IF NOT EXISTS users
-                 (user_id INTEGER PRIMARY KEY,
-                  lastname TEXT,
-                  firstname TEXT,
-                  group_name TEXT,
-                  birthdate TEXT)''')
-    
-    # Таблица результатов полетов
-    c.execute('''CREATE TABLE IF NOT EXISTS flight_results
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  user_id INTEGER,
-                  simulator TEXT,
-                  track TEXT,
-                  mode TEXT,
-                  best_time REAL,
-                  date TEXT,
-                  FOREIGN KEY (user_id) REFERENCES users (user_id))''')
-    
-    conn.commit()
-    conn.close()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start"""
     keyboard = [
+        ['Регистрация пользователя'],
         ['Регистрация результата'],
         ['Таблица лидеров']
     ]
@@ -60,6 +34,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         'Привет! 👋\n\n'
         'Я бот для системы FPV Simulators Leaderboard.\n'
+        'Сначала необходимо зарегистрироваться, затем можно добавлять результаты.\n'
         'Выберите действие:',
         reply_markup=reply_markup
     )
@@ -67,6 +42,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показ главного меню"""
     keyboard = [
+        ['Регистрация пользователя'],
         ['Регистрация результата'],
         ['Таблица лидеров']
     ]
@@ -111,18 +87,13 @@ async def birthdate(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['birthdate'] = update.message.text
         
         # Сохранение в базу данных
-        conn = sqlite3.connect('fpv_leaderboard.db')
-        c = conn.cursor()
-        c.execute('''INSERT OR REPLACE INTO users 
-                     (user_id, lastname, firstname, group_name, birthdate)
-                     VALUES (?, ?, ?, ?, ?)''',
-                  (update.effective_user.id,
-                   context.user_data['lastname'],
-                   context.user_data['firstname'],
-                   context.user_data['group'],
-                   context.user_data['birthdate']))
-        conn.commit()
-        conn.close()
+        create_or_update_user(
+            user_id=update.effective_user.id,
+            lastname=context.user_data['lastname'],
+            firstname=context.user_data['firstname'],
+            group_name=context.user_data['group'],
+            birthdate=context.user_data['birthdate']
+        )
         
         await show_main_menu(update, context)
         
@@ -143,6 +114,16 @@ async def birthdate(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def register_result_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Начало регистрации результата полета"""
+    # Проверяем, зарегистрирован ли пользователь
+    user = get_user(update.effective_user.id)
+    
+    if not user:
+        await update.message.reply_text(
+            'Для добавления результата необходимо сначала зарегистрироваться.\n'
+            'Пожалуйста, нажмите кнопку "Регистрация пользователя"'
+        )
+        return ConversationHandler.END
+    
     keyboard = [
         ['FPV Freerider'],
         ['DCL The Game'],
@@ -195,22 +176,46 @@ async def mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return BEST_TIME
 
 async def best_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка лучшего времени и сохранение результата"""
+    """Обработка лучшего времени"""
     try:
         time = float(update.message.text)
-        conn = sqlite3.connect('fpv_leaderboard.db')
-        c = conn.cursor()
-        c.execute('''INSERT INTO flight_results 
-                     (user_id, simulator, track, mode, best_time, date)
-                     VALUES (?, ?, ?, ?, ?, ?)''',
-                  (update.effective_user.id,
-                   context.user_data['simulator'],
-                   context.user_data['track'],
-                   context.user_data['mode'],
-                   time,
-                   datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-        conn.commit()
-        conn.close()
+        context.user_data['best_time'] = time
+        await update.message.reply_text(
+            'Отлично! Теперь отправьте скриншот, подтверждающий ваше время.\n'
+            'Изображение должно быть в формате JPG или PNG.'
+        )
+        return IMAGE
+    except ValueError:
+        await update.message.reply_text('Пожалуйста, введите число:')
+        return BEST_TIME
+
+async def save_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка загрузки изображения"""
+    try:
+        if not update.message.photo:
+            await update.message.reply_text('Пожалуйста, отправьте изображение.')
+            return IMAGE
+        
+        # Получаем файл с самым высоким разрешением
+        photo = update.message.photo[-1]
+        file = await context.bot.get_file(photo.file_id)
+        
+        # Создаем имя файла на основе времени и ID пользователя
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f'images/{update.effective_user.id}_{timestamp}.jpg'
+        
+        # Скачиваем файл
+        await file.download_to_drive(filename)
+        
+        # Сохраняем результат в базу данных
+        add_flight_result(
+            user_id=update.effective_user.id,
+            simulator=context.user_data['simulator'],
+            track=context.user_data['track'],
+            mode=context.user_data['mode'],
+            best_time=context.user_data['best_time'],
+            image_path=filename
+        )
         
         await show_main_menu(update, context)
         await update.message.reply_text(
@@ -218,11 +223,13 @@ async def best_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f'Симулятор: {context.user_data["simulator"]}\n'
             f'Трасса: {context.user_data["track"]}\n'
             f'Режим: {context.user_data["mode"]}\n'
-            f'Лучшее время: {time:.2f} сек'
+            f'Лучшее время: {context.user_data["best_time"]:.2f} сек'
         )
-    except ValueError:
-        await update.message.reply_text('Пожалуйста, введите число:')
-        return BEST_TIME
+    except Exception as e:
+        logging.error(f"Ошибка при сохранении изображения: {str(e)}")
+        await update.message.reply_text(
+            'Произошла ошибка при сохранении результата. Пожалуйста, попробуйте еще раз.'
+        )
     
     return ConversationHandler.END
 
@@ -274,22 +281,11 @@ async def leaderboard_track(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка выбора трассы и показ таблицы лидеров"""
     context.user_data['leaderboard_track'] = update.message.text
     
-    conn = sqlite3.connect('fpv_leaderboard.db')
-    c = conn.cursor()
-    
-    # Получаем результаты по выбранным параметрам
-    c.execute('''SELECT u.lastname, u.firstname, u.group_name, fr.best_time
-                 FROM flight_results fr
-                 JOIN users u ON fr.user_id = u.user_id
-                 WHERE fr.simulator = ? AND fr.mode = ? AND fr.track = ?
-                 ORDER BY fr.best_time ASC
-                 LIMIT 10''',
-              (context.user_data['leaderboard_simulator'],
-               context.user_data['leaderboard_mode'],
-               context.user_data['leaderboard_track']))
-    
-    results = c.fetchall()
-    conn.close()
+    results = get_leaderboard(
+        simulator=context.user_data['leaderboard_simulator'],
+        mode=context.user_data['leaderboard_mode'],
+        track=context.user_data['leaderboard_track']
+    )
     
     current_time = datetime.now().strftime('%H:%M %d.%m.%Y')
     leaderboard = f'Leaderboard Аэроквантум-15 от {current_time} г.\n'
@@ -316,15 +312,12 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 def main():
-    # Инициализация базы данных
-    init_db()
-    
     # Создаем приложение бота
     application = Application.builder().token('7792446695:AAENgsE0ROOnpwa8cPjHMYmRk5T7QCCukUA').build()
 
     # Создаем обработчик регистрации пользователя
     conv_handler = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex('^Регистрация$'), register_start)],
+        entry_points=[MessageHandler(filters.Regex('^Регистрация пользователя$'), register_start)],
         states={
             LASTNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, lastname)],
             FIRSTNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, firstname)],
@@ -342,6 +335,7 @@ def main():
             TRACK: [MessageHandler(filters.Regex('^(map1|map2)$'), track)],
             MODE: [MessageHandler(filters.Regex('^(Self-Leveling|Acro)$'), mode)],
             BEST_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, best_time)],
+            IMAGE: [MessageHandler(filters.PHOTO, save_image)],
         },
         fallbacks=[CommandHandler('cancel', cancel)]
     )
