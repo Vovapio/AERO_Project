@@ -1,6 +1,7 @@
 from sqlalchemy.orm import sessionmaker
 from models import engine, User, FlightResult
 from datetime import datetime
+import logging
 
 # Создание фабрики сессий
 Session = sessionmaker(bind=engine)
@@ -43,6 +44,35 @@ def add_flight_result(user_id: int, simulator: str, track: str, mode: str, best_
     """Добавление результата полета"""
     try:
         session = Session()
+        
+        # Находим старый результат для той же комбинации параметров
+        old_result = session.query(FlightResult).filter(
+            FlightResult.user_id == user_id,
+            FlightResult.simulator == simulator,
+            FlightResult.track == track,
+            FlightResult.mode == mode
+        ).first()
+        
+        # Если есть старый результат и новый лучше, удаляем старый
+        if old_result:
+            if best_time < old_result.best_time:
+                # Удаляем старое изображение, если оно есть
+                if old_result.image_path:
+                    try:
+                        import os
+                        if os.path.exists(old_result.image_path):
+                            os.remove(old_result.image_path)
+                    except Exception as e:
+                        logging.error(f"Ошибка при удалении старого изображения: {str(e)}")
+                
+                session.delete(old_result)
+                session.commit()
+            else:
+                # Если новый результат хуже, отменяем добавление
+                session.close()
+                raise ValueError("Новый результат хуже предыдущего")
+        
+        # Добавляем новый результат
         result = FlightResult(
             user_id=user_id,
             simulator=simulator,

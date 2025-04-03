@@ -225,8 +225,15 @@ async def save_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f'Режим: {context.user_data["mode"]}\n'
             f'Лучшее время: {context.user_data["best_time"]:.2f} сек'
         )
+    except ValueError as e:
+        # Если новый результат хуже предыдущего
+        await show_main_menu(update, context)
+        await update.message.reply_text(
+            'Этот результат хуже вашего предыдущего. Сохранен не будет.'
+        )
     except Exception as e:
         logging.error(f"Ошибка при сохранении изображения: {str(e)}")
+        await show_main_menu(update, context)
         await update.message.reply_text(
             'Произошла ошибка при сохранении результата. Пожалуйста, попробуйте еще раз.'
         )
