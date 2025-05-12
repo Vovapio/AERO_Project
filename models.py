@@ -14,7 +14,6 @@ class User(Base):
     group_name = Column(String)
     birthdate = Column(String)
     
-    # Связь с результатами
     results = relationship("FlightResult", back_populates="user")
 
 class FlightResult(Base):
@@ -28,10 +27,9 @@ class FlightResult(Base):
     best_time = Column(Float)
     date = Column(DateTime, default=datetime.now)
     image_path = Column(String, nullable=True)  # Путь к изображению
-    
-    # Связь с пользователем
+
     user = relationship("User", back_populates="results")
 
-# Создание движка базы данных
+
 engine = create_engine('sqlite:///fpv_leaderboard.db')
 Base.metadata.create_all(engine) 
