@@ -3,11 +3,10 @@ from models import engine, User, FlightResult
 from datetime import datetime
 import logging
 
-# Создание фабрики сессий
+
 Session = sessionmaker(bind=engine)
 
 def get_user(user_id: int) -> User:
-    """Получение пользователя по ID"""
     try:
         session = Session()
         user = session.query(User).filter(User.user_id == user_id).first()
@@ -18,7 +17,7 @@ def get_user(user_id: int) -> User:
         session.close()
 
 def create_or_update_user(user_id: int, lastname: str, firstname: str, group_name: str, birthdate: str) -> User:
-    """Создание или обновление пользователя"""
+
     try:
         session = Session()
         user = session.query(User).filter(User.user_id == user_id).first()
@@ -41,11 +40,10 @@ def create_or_update_user(user_id: int, lastname: str, firstname: str, group_nam
         session.close()
 
 def add_flight_result(user_id: int, simulator: str, track: str, mode: str, best_time: float, image_path: str = None) -> FlightResult:
-    """Добавление результата полета"""
     try:
         session = Session()
         
-        # Находим старый результат для той же комбинации параметров
+       
         old_result = session.query(FlightResult).filter(
             FlightResult.user_id == user_id,
             FlightResult.simulator == simulator,
@@ -53,10 +51,10 @@ def add_flight_result(user_id: int, simulator: str, track: str, mode: str, best_
             FlightResult.mode == mode
         ).first()
         
-        # Если есть старый результат и новый лучше, удаляем старый
+        
         if old_result:
             if best_time < old_result.best_time:
-                # Удаляем старое изображение, если оно есть
+                
                 if old_result.image_path:
                     try:
                         import os
@@ -68,11 +66,11 @@ def add_flight_result(user_id: int, simulator: str, track: str, mode: str, best_
                 session.delete(old_result)
                 session.commit()
             else:
-                # Если новый результат хуже, отменяем добавление
+                
                 session.close()
                 raise ValueError("Новый результат хуже предыдущего")
         
-        # Добавляем новый результат
+      
         result = FlightResult(
             user_id=user_id,
             simulator=simulator,
@@ -93,7 +91,7 @@ def add_flight_result(user_id: int, simulator: str, track: str, mode: str, best_
         session.close()
 
 def get_leaderboard(simulator: str, mode: str, track: str, limit: int = 10):
-    """Получение таблицы лидеров"""
+
     try:
         session = Session()
         results = session.query(
