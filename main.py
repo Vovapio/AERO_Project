@@ -1,29 +1,22 @@
-# This is a sample Python script.
-
-# Press Shift+F10 to execute it or replace it with your code.
-# Press Double Shift to search everywhere for classes, files, tool windows, actions, and settings.
-
 import logging
 from datetime import datetime
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 from database import get_user, create_or_update_user, add_flight_result, get_leaderboard
 
-# Включаем логирование
+
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 
-# Состояния для регистрации
 LASTNAME, FIRSTNAME, GROUP, BIRTHDATE = range(4)
-# Состояния для регистрации результата
+
 SIMULATOR, TRACK, MODE, BEST_TIME, IMAGE = range(4, 9)
-# Состояния для просмотра таблицы лидеров
+
 LEADERBOARD_SIMULATOR, LEADERBOARD_MODE, LEADERBOARD_TRACK = range(8, 11)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /start"""
     keyboard = [
         ['Регистрация пользователя'],
         ['Регистрация результата'],
@@ -40,7 +33,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показ главного меню"""
     keyboard = [
         ['Регистрация пользователя'],
         ['Регистрация результата'],
@@ -53,7 +45,6 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Начало процесса регистрации"""
     await update.message.reply_text(
         'Давайте начнем регистрацию!\n'
         'Пожалуйста, введите вашу фамилию:',
@@ -62,31 +53,27 @@ async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return LASTNAME
 
 async def lastname(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка фамилии"""
     context.user_data['lastname'] = update.message.text
     await update.message.reply_text('Отлично! Теперь введите ваше имя:')
     return FIRSTNAME
 
 async def firstname(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка имени"""
     context.user_data['firstname'] = update.message.text
     await update.message.reply_text('Введите вашу учебную группу:')
     return GROUP
 
 async def group(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка учебной группы"""
     context.user_data['group'] = update.message.text
     await update.message.reply_text('Введите вашу дату рождения в формате ДД.ММ.ГГГГ:')
     return BIRTHDATE
 
 async def birthdate(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка даты рождения и сохранение в БД"""
     try:
-        # Проверка формата даты
+ 
         datetime.strptime(update.message.text, '%d.%m.%Y')
         context.user_data['birthdate'] = update.message.text
         
-        # Сохранение в базу данных
+      
         create_or_update_user(
             user_id=update.effective_user.id,
             lastname=context.user_data['lastname'],
@@ -113,8 +100,7 @@ async def birthdate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def register_result_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Начало регистрации результата полета"""
-    # Проверяем, зарегистрирован ли пользователь
+
     user = get_user(update.effective_user.id)
     
     if not user:
@@ -137,7 +123,6 @@ async def register_result_start(update: Update, context: ContextTypes.DEFAULT_TY
     return SIMULATOR
 
 async def simulator(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка выбора симулятора"""
     context.user_data['simulator'] = update.message.text
     
     keyboard = [
@@ -152,7 +137,6 @@ async def simulator(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return TRACK
 
 async def track(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка выбора трассы"""
     context.user_data['track'] = update.message.text
     
     keyboard = [
@@ -167,7 +151,6 @@ async def track(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return MODE
 
 async def mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка выбора режима"""
     context.user_data['mode'] = update.message.text
     await update.message.reply_text(
         'Введите лучшее время в секундах:',
@@ -176,7 +159,6 @@ async def mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return BEST_TIME
 
 async def best_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка лучшего времени"""
     try:
         time = float(update.message.text)
         context.user_data['best_time'] = time
@@ -190,24 +172,20 @@ async def best_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return BEST_TIME
 
 async def save_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка загрузки изображения"""
     try:
         if not update.message.photo:
             await update.message.reply_text('Пожалуйста, отправьте изображение.')
             return IMAGE
         
-        # Получаем файл с самым высоким разрешением
         photo = update.message.photo[-1]
         file = await context.bot.get_file(photo.file_id)
         
-        # Создаем имя файла на основе времени и ID пользователя
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         filename = f'images/{update.effective_user.id}_{timestamp}.jpg'
         
-        # Скачиваем файл
         await file.download_to_drive(filename)
         
-        # Сохраняем результат в базу данных
+
         add_flight_result(
             user_id=update.effective_user.id,
             simulator=context.user_data['simulator'],
@@ -226,7 +204,7 @@ async def save_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f'Лучшее время: {context.user_data["best_time"]:.2f} сек'
         )
     except ValueError as e:
-        # Если новый результат хуже предыдущего
+
         await show_main_menu(update, context)
         await update.message.reply_text(
             'Этот результат хуже вашего предыдущего. Сохранен не будет.'
@@ -241,7 +219,7 @@ async def save_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def leaderboard_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Начало просмотра таблицы лидеров"""
+
     keyboard = [
         ['FPV Freerider'],
         ['DCL The Game'],
@@ -255,7 +233,7 @@ async def leaderboard_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return LEADERBOARD_SIMULATOR
 
 async def leaderboard_simulator(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка выбора симулятора для таблицы лидеров"""
+
     context.user_data['leaderboard_simulator'] = update.message.text
     
     keyboard = [
@@ -270,7 +248,7 @@ async def leaderboard_simulator(update: Update, context: ContextTypes.DEFAULT_TY
     return LEADERBOARD_MODE
 
 async def leaderboard_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка выбора режима для таблицы лидеров"""
+
     context.user_data['leaderboard_mode'] = update.message.text
     
     keyboard = [
@@ -285,7 +263,7 @@ async def leaderboard_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return LEADERBOARD_TRACK
 
 async def leaderboard_track(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка выбора трассы и показ таблицы лидеров"""
+
     context.user_data['leaderboard_track'] = update.message.text
     
     results = get_leaderboard(
@@ -304,7 +282,7 @@ async def leaderboard_track(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for i, (lastname, firstname, group, time) in enumerate(results, 1):
             leaderboard += f'{i}. {time:.3f} - {lastname} {firstname}, гр. {group}\n'
         
-        # Добавляем пустые места, если их меньше 10
+
         for i in range(len(results) + 1, 11):
             leaderboard += f'{i}. (место не занято)\n'
     
@@ -313,16 +291,16 @@ async def leaderboard_track(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отмена регистрации"""
+
     await show_main_menu(update, context)
     await update.message.reply_text('Действие отменено.')
     return ConversationHandler.END
 
 def main():
-    # Создаем приложение бота
+
     application = Application.builder().token('7792446695:AAENgsE0ROOnpwa8cPjHMYmRk5T7QCCukUA').build()
 
-    # Создаем обработчик регистрации пользователя
+
     conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^Регистрация пользователя$'), register_start)],
         states={
@@ -334,7 +312,7 @@ def main():
         fallbacks=[CommandHandler('cancel', cancel)]
     )
 
-    # Создаем обработчик регистрации результата
+ 
     result_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^Регистрация результата$'), register_result_start)],
         states={
@@ -347,7 +325,7 @@ def main():
         fallbacks=[CommandHandler('cancel', cancel)]
     )
 
-    # Создаем обработчик просмотра таблицы лидеров
+ 
     leaderboard_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^Таблица лидеров$'), leaderboard_start)],
         states={
@@ -358,17 +336,17 @@ def main():
         fallbacks=[CommandHandler('cancel', cancel)]
     )
 
-    # Добавляем обработчики команд
+
     application.add_handler(CommandHandler('start', start))
     application.add_handler(conv_handler)
     application.add_handler(result_handler)
     application.add_handler(leaderboard_handler)
 
-    # Запускаем бота
+
     print('Бот запущен...')
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
     main()
 
-# See PyCharm help at https://www.jetbrains.com/help/pycharm/
+
