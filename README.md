@@ -159,4 +159,11 @@ python src/bot.py
 │   └── database.py
 ├── requirements.txt
 └── README.md
+
+
+Ссылка на бота:
+@Kvant_15_FPV_bot
+
 ```
+
+
